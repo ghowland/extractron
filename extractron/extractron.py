@@ -17,6 +17,95 @@ import re
 DEFAULT_OUTPUT_FORMAT = 'yaml'
 
 
+def LoadRules(rule_path, command_options):
+  """Load the rules from a YAML or JSON"""
+  # Format: Default Unknown
+  file_format = command_options.get('rule_format', None)
+  
+  # File format was not specified, try to infer from the file path suffix
+  if file_format == None:
+    suffix = rule_path.split('.')[-1]
+    
+    if suffix in ('yaml', 'json'):
+      file_format = suffix
+    else:
+      Usage('Unknown rule-format.  Use option format or rename file to end in .yaml or .json.')
+  
+  
+  # Try to load the file content, 
+  fp = None
+  try:
+    fp = open(rule_path)
+    rule_text = fp.read()
+  
+  except Exception, e:
+    Usage('Unable to load rule file: %s' % e)
+  
+  finally:
+    if fp:
+      fp.close()
+  
+  
+  # Import from their formats
+  if file_format == 'yaml':
+    #NOTE(g): Import is done here, instead of the top of the file, to not require this module if it is not used
+    import yaml
+    
+    data = yaml.loads(rule_text)
+  
+  elif file_format == 'json':
+    #NOTE(g): Import is done here, instead of the top of the file, to not require this module if it is not used
+    import json
+    
+    data = json.loads(rule_text)
+  
+  else:
+    Usage('Unknown file format, this should never occur: %s' % file_format)
+  
+  
+  return data
+
+
+def Extract(rule_path, input_path_list, command_options):
+  """Extract data."""
+  data = []
+  
+  
+  # Load the rules, determine the format inside this
+  rules = LoadRules(rule_path, command_options)
+  
+  
+  # If we have real file paths to load (not using STDIN)
+  if input_path_list:
+    # Process each of the paths
+    for path in input_path_list:
+      if command_options.get('verbose', False):
+        sys.stderr.write('Processing file: %s\n' % path)
+      
+      # Load this file's textual data
+      fp = None
+      try:
+        fp = open(path)
+        text = fp.read()
+      
+      finally:
+        if fp:
+          fp.close()
+  
+  # Else, use STDIN
+  else:
+    text = sys.stdin.read()
+  
+  # Turn this path's text into lines, which is what we process
+  lines = text.split('\n')
+  
+  
+  
+  
+  
+  return data
+
+
 def LoadYaml(path):
   """Returns data from YAML file"""
   #NOTE(g): Import is done here, instead of the top of the file, to not require this module if it is not used
@@ -261,6 +350,7 @@ def Main(args=None):
   command_options['verbose'] = False
   command_options['always_yes'] = False
   command_optinos['output_format'] = DEFAULT_OUTPUT_FORMAT
+  command_optinos['rule_format'] = None
   
   
   # Process out CLI options
@@ -284,6 +374,13 @@ def Main(args=None):
       
       command_options['output_format'] = value
     
+    # Rule Format
+    elif option in ('-r', '--rule-format'):
+      if value not in ('yaml', 'json'):
+        Usage('Unknown rule-format type: %s' % value)
+      
+      command_options['rule_format'] = value
+    
     # Invalid option
     else:
       Usage('Unknown option: %s' % option)
@@ -295,13 +392,28 @@ def Main(args=None):
   
   # Ensure we at least have one spec file
   if len(args) < 1:
-    Usage('No action specified')
+    Usage('No rule file path specified')
   
 
   #try:
   if 1:
-    result = Extract(args[0], args[1:], command_options)
-    pass
+    data = Extract(args[0], args[1:], command_options)
+    
+    # Dump formatted output
+    if command_options['output_format'] == 'yaml':
+      print DumpYaml(data)
+      
+    elif command_options['output_format'] == 'json':
+      print DumpJson(data)
+      
+    elif command_options['output_format'] == 'pprint':
+      print DumpPprint(data)
+      
+    elif command_options['output_format'] == 'csv':
+      print DumpCsv(data)
+      
+    else:
+      raise Exception('Unknown output-format, this should never happen: %s' % command_options['output_format'])
   
   #NOTE(g): Catch all exceptions, and return in properly formatted output
   #TODO(g): Implement stack trace in Exception handling so we dont lose where this
