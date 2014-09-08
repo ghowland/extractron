@@ -74,6 +74,8 @@ def Extract(rule_path, input_path_list, command_options):
   # Load the rules, determine the format inside this
   rules = LoadRules(rule_path, command_options)
   
+  # List of text sources
+  text_list = []
   
   # If we have real file paths to load (not using STDIN)
   if input_path_list:
@@ -87,6 +89,8 @@ def Extract(rule_path, input_path_list, command_options):
       try:
         fp = open(path)
         text = fp.read()
+        
+        text_list.append(text)
       
       finally:
         if fp:
@@ -95,15 +99,20 @@ def Extract(rule_path, input_path_list, command_options):
   # Else, use STDIN
   else:
     text = sys.stdin.read()
-  
-  # Turn this path's text into lines, which is what we process
-  lines = text.split('\n')
-  
+    
+    text_list.append(text)
   
   
+  # Result will be a list of data
+  data_list = []
   
+  # Process the data for each of these texts, append in order
+  for text in text_list:
+    data = ProcessText(text, rules, command_options)
+    
+    data_list.append(data)
   
-  return data
+  return data_list
 
 
 def LoadYaml(path):
@@ -176,6 +185,70 @@ def DumpCsv(data):
   """Returns textual JSON from data"""
   
   raise Exception('TBI: Need standard container structure for this to work, cause its flat...')
+
+
+def ProcessText(text, rules, command_options):
+  """"""
+  # Turn this path's text into lines, which is what we process
+  lines = text.split('\n')
+  
+  # No previous line at the start
+  previous_line_data = None
+  
+  # Processing data
+  processing = {'data':{}}
+
+  # Process the lines  
+  for line in lines:
+    saved_previous_line_data = previous_line_data
+    previous_line_data = ProcessLine(line, processing, previous_line_data)
+  
+  
+  return processing
+  
+  
+
+def ProcessLine(line, processing, previous_line_data):
+  """Process this life, based on it's current position and spec."""
+  line_data = {'line':line, 'line_offset':processing['offset_processed']}
+  
+  # Update with always-included data, like glob keys, and the component
+  line_data.update(processing['data'])
+  
+  # Test if this line is multi-line (positive test)
+  is_multi_line = False
+  for multi_line_test_regex in processing['spec_data'].get('multi line regex test', []):
+    if re.match(multi_line_test_regex, line):
+      is_multi_line = True
+      break
+  # Negative regex test
+  for multi_line_test_regex in processing['spec_data'].get('multi line regex not', []):
+    if not re.match(multi_line_test_regex, line):
+      is_multi_line = True
+      break
+  
+  # If this is multi_line and we have a real previous line to embed this data in
+  if is_multi_line and previous_line_data != None:
+    #print 'Multiline: %s' % line
+    if 'multiline' not in previous_line_data:
+      previous_line_data['multiline'] = []
+    
+    previous_line_data['multiline'].append(line)
+
+
+  # Only process rules on first lines (not multi lines), and return the line_data to be the next line's previous_line_data
+  if not is_multi_line:
+    for process_rule in processing['spec_data']['process']:
+      ProcessTextRule(line_data, process_rule)
+    
+    return line_data
+  
+  # Else, this is multi-line, so return it to continue to be the next line's previous_line_data
+  else:
+    #TODO(g): Save this multi-line data every time?  Otherwise when does it get saved out?
+    pass
+    
+    return previous_line_data
 
 
 def ProcessTextRule(line_data, process_rule):
