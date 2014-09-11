@@ -1,0 +1,11 @@
+- regex: '%(ip_address)s - - [%(day)s/%(month)s/%(year)s:%(time)s %(timezone_offset)s] "%(method)s %(uri)s" %(status)s %(size)s'
+  id: 1
+  multi line regex test: False
+  multi line regex not: False
+
+- regex: '%(ip_address)s - - [%(date)s] "%(method)s %(uri)s" %(status)s %(size)s'
+  id: 2
+  multi line regex test: False
+  multi line regex not: False
+
+

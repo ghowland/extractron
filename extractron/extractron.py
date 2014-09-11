@@ -10,8 +10,10 @@ Copyright Geoff Howland, 2014.  MIT License.
 
 
 import sys
+import os
 import getopt
 import re
+
 
 
 DEFAULT_OUTPUT_FORMAT = 'yaml'
@@ -32,32 +34,12 @@ def LoadRules(rule_path, command_options):
       Usage('Unknown rule-format.  Use option format or rename file to end in .yaml or .json.')
   
   
-  # Try to load the file content, 
-  fp = None
-  try:
-    fp = open(rule_path)
-    rule_text = fp.read()
-  
-  except Exception, e:
-    Usage('Unable to load rule file: %s' % e)
-  
-  finally:
-    if fp:
-      fp.close()
-  
-  
   # Import from their formats
   if file_format == 'yaml':
-    #NOTE(g): Import is done here, instead of the top of the file, to not require this module if it is not used
-    import yaml
-    
-    data = yaml.loads(rule_text)
+    data = LoadYaml(rule_path)
   
   elif file_format == 'json':
-    #NOTE(g): Import is done here, instead of the top of the file, to not require this module if it is not used
-    import json
-    
-    data = json.loads(rule_text)
+    data = LoadJson(rule_path)
   
   else:
     Usage('Unknown file format, this should never occur: %s' % file_format)
@@ -110,7 +92,7 @@ def Extract(rule_path, input_path_list, command_options):
   for text in text_list:
     data = ProcessText(text, rules, command_options)
     
-    data_list.append(data)
+    data_list += data
   
   return data_list
 
@@ -138,7 +120,7 @@ def DumpYaml(data):
   #NOTE(g): Import is done here, instead of the top of the file, to not require this module if it is not used
   import yaml
   
-  text = yaml.dumps(data)
+  text = yaml.safe_dump(data)
   
   return text
 
@@ -196,19 +178,23 @@ def ProcessText(text, rules, command_options):
   previous_line_data = None
   
   # Processing data
-  processing = {'data':{}}
-
+  processing = {'data':{}, 'offset_processed':0}
+  
+  result = []
+  
   # Process the lines  
   for line in lines:
     saved_previous_line_data = previous_line_data
-    previous_line_data = ProcessLine(line, processing, previous_line_data)
+    
+    line_result = ProcessLine(line, rules, processing, previous_line_data)
+    
+    result.append(line_result)
   
   
-  return processing
-  
-  
+  return result
 
-def ProcessLine(line, processing, previous_line_data):
+
+def ProcessLine(line, rules, processing, previous_line_data):
   """Process this life, based on it's current position and spec."""
   line_data = {'line':line, 'line_offset':processing['offset_processed']}
   
@@ -217,15 +203,17 @@ def ProcessLine(line, processing, previous_line_data):
   
   # Test if this line is multi-line (positive test)
   is_multi_line = False
-  for multi_line_test_regex in processing['spec_data'].get('multi line regex test', []):
-    if re.match(multi_line_test_regex, line):
-      is_multi_line = True
-      break
+  for rule in rules:
+    if rule.get('multi line regex test', False):
+      if re.match(rule['regex'], line):
+        is_multi_line = True
+        break
   # Negative regex test
-  for multi_line_test_regex in processing['spec_data'].get('multi line regex not', []):
-    if not re.match(multi_line_test_regex, line):
-      is_multi_line = True
-      break
+  for rule in rules:
+    if rule.get('multi line regex not', False):
+      if re.match(rule['regex'], line):
+        is_multi_line = True
+        break
   
   # If this is multi_line and we have a real previous line to embed this data in
   if is_multi_line and previous_line_data != None:
@@ -238,66 +226,17 @@ def ProcessLine(line, processing, previous_line_data):
 
   # Only process rules on first lines (not multi lines), and return the line_data to be the next line's previous_line_data
   if not is_multi_line:
-    for process_rule in processing['spec_data']['process']:
-      ProcessTextRule(line_data, process_rule)
+    #print line
     
-    return line_data
-  
-  # Else, this is multi-line, so return it to continue to be the next line's previous_line_data
-  else:
-    #TODO(g): Save this multi-line data every time?  Otherwise when does it get saved out?
-    pass
-    
-    return previous_line_data
-
-
-def ProcessTextRule(line_data, process_rule):
-  """Updates line_data based on the rules."""
-  # Split
-  if process_rule['type'] == 'split':
-    split_data = process_rule['split']
-    
-    #print split_data
-    #print
-    
-    parts = line_data[process_rule['key']].split(split_data['separator'], split_data.get('max split', -1))
-    
-    #print parts
-    
-    for (key, part_indexes) in split_data['values'].items():
-      key_parts = []
-      
-      try:
-        for part_index in part_indexes:
-          key_parts.append(parts[part_index])
-      except IndexError, e:
-        log('WARNING: Part not found: %s: %s: %s' % (part_index, parts, line_data[process_rule['key']]))
-      
-      line_data[key] = ' '.join(key_parts)
-      
-  
-  # Replace
-  elif process_rule['type'] == 'replace':
-    # Perform replacement on each term we match
-    for match in process_rule['match']:
-      # Match -> Replaced (usually deleting things out)
-      #print 'Replacing: "%s" with "%s"' % (match, process_rule['replace'])
-      #print line_data[process_rule['key']]
-      line_data[process_rule['key']] = line_data[process_rule['key']].replace(match, process_rule['replace'])
-      #print line_data[process_rule['key']]
-  
-  # Delete
-  elif process_rule['type'] == 'delete':
-    if process_rule['key'] in line_data:
-      del line_data[process_rule['key']]
-  
-  # Match
-  elif process_rule['type'] == 'match':
-    database = LoadYaml(process_rule['database'])
-    
+    # Start with: We havent found a match yet
     match_found = False
     
-    for item in database:
+    for item in rules:
+      # Skip the multi-line regext test/not rules
+      if item.get('multi line regex test', False) or item.get('multi line regex not', False):
+        continue
+      
+      # Break out our terms for this rule item
       terms = re.findall('%\((.*?)\)s', item['regex'])
       #print item['regex']
       #print terms
@@ -307,11 +246,16 @@ def ProcessTextRule(line_data, process_rule):
       # Pre-processing step, to remove any conflicting characters with the rest of the regex which need to be escaped/sanitized
       for term in terms:
         regex = regex.replace('%%(%s)s' % term, 'MATCHMATCHMATCH')
-        
+      
       regex = SanitizeRegex(regex)
       regex = regex.replace('MATCHMATCHMATCH', '(.*?)')
       
-      regex_result = re.findall(regex, line_data[process_rule['key']])
+      #print '--- %s' % item['id']
+      #print regex
+      #print line
+        
+      regex_result = re.findall(regex, line)
+      #print regex_result
       if regex_result:
         
         # Python does something stupid with multiple variables, so pull them out of the embedded tuple it adds to the list
@@ -319,7 +263,7 @@ def ProcessTextRule(line_data, process_rule):
           regex_result = regex_result[0]
         
         for count in range(0, len(terms)):
-          #print '%s: %s' % (count, regex_result)
+          #print '%s: %s: %s' % (count, terms[count], regex_result[count])
           line_data[terms[count]] = regex_result[count]
         
         #print regex
@@ -329,31 +273,18 @@ def ProcessTextRule(line_data, process_rule):
         match_found = True
         
         # Save the line match ID, so we can reference it for markup/state information
-        line_data[process_rule['match key']] = item['id']
+        line_data['__rule_id__'] = item['id']
         
         break
-    
-    if not match_found:
-      #print 'MISSING: %s' % line_data[process_rule['key']]
-      pass
       
+    return line_data
   
-  # Convert
-  elif process_rule['type'] == 'convert':
-    if process_rule['target'] == 'integer':
-      try:
-        line_data[process_rule['key']] = int(line_data[process_rule['key']])
-      
-      except ValueError, e:
-        #print 'WARNING: Bad formatting: %s: %s' % (process_rule['key'], line_data)
-        pass
-      
-    else:
-      raise Exception('Unknown covnert target type: %s: %s' % (line_data['spec_path'], process_rule['rule']))
-  
-  # Error - Misconfiguration
+  # Else, this is multi-line, so return it to continue to be the next line's previous_line_data
   else:
-    raise Exception('Unknown process type: %s: %s' % (line_data['spec_path'], process_rule['rule']))
+    #TODO(g): Save this multi-line data every time?  Otherwise when does it get saved out?
+    pass
+    
+    return previous_line_data
 
 
 def SanitizeRegex(text):
@@ -422,8 +353,8 @@ def Main(args=None):
   command_options = {}
   command_options['verbose'] = False
   command_options['always_yes'] = False
-  command_optinos['output_format'] = DEFAULT_OUTPUT_FORMAT
-  command_optinos['rule_format'] = None
+  command_options['output_format'] = DEFAULT_OUTPUT_FORMAT
+  command_options['rule_format'] = None
   
   
   # Process out CLI options
@@ -459,10 +390,6 @@ def Main(args=None):
       Usage('Unknown option: %s' % option)
 
 
-  # Store the command options for our logging
-  utility.log.RUN_OPTIONS = command_options
-  
-  
   # Ensure we at least have one spec file
   if len(args) < 1:
     Usage('No rule file path specified')
